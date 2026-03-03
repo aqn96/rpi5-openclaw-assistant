@@ -61,7 +61,7 @@ This is the most important architectural decision in the project. Rather than fo
 │         │                      │                                    │
 └─────────┼──────────────────────┼────────────────────────────────────┘
           │ Encrypted            │ Tailscale WireGuard Tunnel
-          │ (Telegram Bot API)   │ (100.79.63.64)
+          │ (Telegram Bot API)   │ 
           │                      │
 ┌─────────┼──────────────────────┼────────────────────────────────────┐
 │         ▼                      ▼       RASPBERRY PI 5 (California)  │
