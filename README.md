@@ -2,8 +2,8 @@
 
 > A Raspberry Pi 5 (8GB) transformed into a 24/7 AI personal assistant, accessible from anywhere via Tailscale and controllable through Telegram. Powered by OpenClaw with a cloud-only multi-provider model stack — Groq for speed, Gemini for web search, and OpenRouter as a free fallback.
 
-**Author:** Andrew Nguyen (@aqn96)
-**Status:** Active — managed remotely from Seattle, WA while hardware runs in California
+**Author:** Andrew Nguyen ([@aqn96](https://github.com/aqn96))
+**Status:** Active — managed remotely from a secondary location while hardware runs at the primary site
 **Bot:** MrOpenClaw (codename: Claudius)
 
 ## Table of Contents
@@ -22,7 +22,7 @@
 
 ### The Problem
 
-As an MSCS student splitting time between Seattle and California, I needed a way to run a persistent, private AI assistant on hardware I control — without paying for cloud compute, without exposing my home network, and without being physically present to manage it.
+As an MSCS student splitting time between two locations ~800 miles apart, I needed a way to run a persistent, private AI assistant on hardware I control — without paying for cloud compute, without exposing my home network, and without being physically present to manage it.
 
 ### The Solution
 
@@ -47,10 +47,10 @@ This is the most important architectural decision in the project. Rather than ru
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      ANDREW (Seattle, WA)                           │
+│                    OPERATOR (Remote Location)                       │
 │                                                                     │
 │   ┌───────────┐         ┌──────────────┐                            │
-│   │ Telegram   │         │ MacBook Pro  │                            │
+│   │ Telegram   │         │ Laptop       │                            │
 │   │ (Phone)    │         │ (SSH / TUI)  │                            │
 │   └─────┬─────┘         └──────┬───────┘                            │
 │         │                      │                                    │
@@ -59,7 +59,7 @@ This is the most important architectural decision in the project. Rather than ru
           │ (Telegram Bot API)   │
           │                      │
 ┌─────────┼──────────────────────┼────────────────────────────────────┐
-│         ▼                      ▼       RASPBERRY PI 5 (California)  │
+│         ▼                      ▼       RASPBERRY PI 5 (Primary Site)│
 │                                                                     │
 │   ┌──────────────────────────────────────────────┐                  │
 │   │          OpenClaw Gateway (:18789)            │                  │
@@ -96,7 +96,7 @@ This is the most important architectural decision in the project. Rather than ru
 │   session-memory, command-logger, boot-md                           │
 │                                                                     │
 │   Scheduled Jobs:                                                   │
-│   Morning News Briefing (6 AM PT daily via Gemini)                  │
+│   Morning News Briefing (6 AM daily via Gemini)                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -127,7 +127,7 @@ When Claudius needs to research something on the web, there are two possible pat
 | Pi visibility | Invisible to external websites | Your Pi's IP address is exposed |
 | Chosen for this project | ✅ Yes | ❌ No |
 
-**Design decision:** Mode A was chosen because the Pi sits unattended in California. If a malicious website could trick the agent into running `rm -rf /` while the owner is 800 miles away in Seattle, there would be no way to intervene. By routing all web research through Gemini's infrastructure, the Pi never touches untrusted content.
+**Design decision:** Mode A was chosen because the Pi sits unattended at one location while the owner is ~800 miles away. If a malicious website could trick the agent into running `rm -rf /` with no one physically present to intervene, the consequences would be unrecoverable. By routing all web research through Gemini's infrastructure, the Pi never touches untrusted content.
 
 The tradeoff: Gemini can only return text summaries, not download files or navigate complex web apps. For those tasks, the owner must SSH in directly.
 
@@ -142,22 +142,22 @@ The system uses a keyword-triggered routing strategy to conserve Gemini's limite
 | Backup web search | OpenRouter Llama 3.3 (free) | Manual — `/model openrouter` if Gemini is exhausted |
 | Rate limit recovery | Gemini → OpenRouter | Automatic — failover chain in `openclaw.json` |
 
-**How routing works:** Claudius's system prompt (AGENTS.md) contains trigger phrases like "search for," "latest news," "what's happening today." When detected, Claudius prompts Andrew to switch to Gemini before answering. After the search is complete, Claudius suggests switching back to Groq to conserve quota.
+**How routing works:** Claudius's system prompt (AGENTS.md) contains trigger phrases like "search for," "latest news," "what's happening today." When detected, Claudius prompts the operator to switch to Gemini before answering. After the search is complete, Claudius suggests switching back to Groq to conserve quota.
 
 **Important:** The `.md` files instruct Claudius to *suggest* model switches — they don't perform automatic routing. The actual failover chain (Groq → Gemini → OpenRouter) is configured in `openclaw.json` and handles rate-limit recovery automatically.
 
 ### 2.5 Scheduled Automation
 
-A cron job runs daily at 6 AM Pacific using Gemini (isolated session, announced to Telegram):
+A cron job runs daily at 6 AM local time using Gemini (isolated session, announced to Telegram):
 
 ```bash
 openclaw cron add \
   --name "Morning News Briefing" \
   --cron "0 6 * * *" \
-  --tz "America/Los_Angeles" \
+  --tz "<your_timezone>" \
   --model "google/gemini-2.5-flash" \
   --session isolated \
-  --message "Search the web for today's top news headlines..." \
+  --message "Search the web for today's top news headlines — US and world. Give a brief morning briefing: 5-7 bullet points, most important stories first. Keep it concise and direct." \
   --announce --channel telegram --to "<your_telegram_id>"
 ```
 
@@ -182,13 +182,13 @@ Node.js acts as the "nervous system" connecting multiple cloud LLM providers to 
 | Cooling | Raspberry Pi 5 Active Cooler | Keeps CPU at ~47°C under idle load |
 | Storage | SanDisk 64GB Extreme A2 microSDXC | 58GB usable |
 | Network | Ethernet (primary) + Wi-Fi (backup) | Dual-homed for reliability |
-| Client | Apple MacBook Pro (Seattle) | SSH via Tailscale tunnel |
+| Client | Laptop at remote location | SSH via Tailscale tunnel |
 
 ### Software
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| OS | Raspberry Pi OS 64-bit (Debian 12 Bookworm) | Base operating system, kernel 6.12.62 |
+| OS | Raspberry Pi OS 64-bit (Debian 12 Bookworm) | Base operating system |
 | Runtime | Node.js 22 LTS | Required by OpenClaw agent framework |
 | AI Agent | OpenClaw 2026.3.1 | Orchestrates LLMs, tools, and messaging channels |
 | Primary LLM | Groq Llama 3.3 70B | Fast free-tier cloud inference for daily chat |
@@ -196,7 +196,7 @@ Node.js acts as the "nervous system" connecting multiple cloud LLM providers to 
 | Fallback LLM | OpenRouter Llama 3.3 70B (free) | Last-resort provider when others are rate-limited |
 | VPN | Tailscale | WireGuard mesh network, MagicDNS |
 | SSH Protection | Fail2Ban | Brute-force mitigation on SSH |
-| Version Control | GitHub CLI (`gh`) | Authenticated as aqn96 via fine-grained PAT |
+| Version Control | GitHub CLI (`gh`) | Authenticated as [@aqn96](https://github.com/aqn96) via fine-grained PAT |
 | Monitoring | btop, vcgencmd | System health dashboard and CPU temperature |
 | Shell | Bash + custom MOTD via figlet | Personalized login experience with system stats |
 
@@ -212,7 +212,7 @@ Using Raspberry Pi Imager on a Mac:
 2. OS: Raspberry Pi OS (64-bit)
 3. Storage: Select the microSD card
 4. OS Customisation (click "Next" → "Edit Settings"):
-   - General tab: Set hostname (`aqn-rpios`), username (`aqnguyen96`), password, Wi-Fi credentials, timezone, keyboard layout
+   - General tab: Set hostname, username, password, Wi-Fi credentials, timezone, keyboard layout
    - Services tab: Enable SSH with password authentication
 5. Write the image and eject the card
 
@@ -222,10 +222,10 @@ Insert the card into the Pi, connect Ethernet and power, wait 2–5 minutes for 
 
 ```bash
 # Find the Pi on your local network
-ping aqn-rpios.local
+ping <your_hostname>.local
 
 # SSH in for the first time
-ssh aqnguyen96@<LOCAL_IP_OR_HOSTNAME.local>
+ssh <your_username>@<your_hostname>.local
 
 # CRITICAL: Change the default password immediately
 passwd
@@ -254,7 +254,7 @@ tailscale status
 **Critical post-setup steps:**
 
 1. Install Tailscale on your client machine (Mac/PC) and log into the same account
-2. In the Tailscale Admin Console, find `aqn-rpios` and **Disable Key Expiry** — without this, the Pi will silently disconnect after 180 days
+2. In the Tailscale Admin Console, find your Pi and **Disable Key Expiry** — without this, the Pi will silently disconnect after 180 days
 3. Create an alias on your Mac so the CLI works:
 
 ```bash
@@ -267,7 +267,7 @@ source ~/.zshrc
 
 - No public IP exposure (the Pi is invisible to port scanners)
 - Works through NAT, firewalls, and university networks
-- MagicDNS means you can `ssh aqnguyen96@aqn-rpios` from anywhere
+- MagicDNS means you can `ssh <your_username>@<your_hostname>` from anywhere
 - Free tier supports 100 devices and 3 users
 
 ### 4.4 Fail2Ban — SSH Brute-Force Protection
@@ -289,7 +289,7 @@ Key settings in `jail.local`:
 
 ```ini
 [DEFAULT]
-ignoreip = 127.0.0.1/8 ::1 <your_lan_cidr> <your_pi_tailscale_ip> <your_mac_tailscale_ip>
+ignoreip = 127.0.0.1/8 ::1 <your_lan_cidr> <your_pi_tailscale_ip> <your_client_tailscale_ip>
 bantime  = 1h
 findtime = 10m
 maxretry = 3
@@ -315,12 +315,10 @@ sudo systemctl restart ssh
 
 ### 4.6 Custom MOTD (Message of the Day)
 
+A dynamic welcome script displays system health on every SSH login:
+
 ```
-Welcome to aqn-rpios!
-----------------------------------------------------------------------
-Date:           Monday, March 02, 2026 12:03:06 PM PST
-OS Version:     Debian GNU/Linux 12 (bookworm) (6.12.25+rpt-rpi-2712)
-Uptime:         up 0 minutes
+Welcome to <your_hostname>!
 ----------------------------------------------------------------------
 System Status:
   CPU Temp:      49.4'C
@@ -331,14 +329,14 @@ System Status:
 
 ```bash
 sudo apt install figlet
-sudo usermod -aG video aqnguyen96
+sudo usermod -aG video <your_username>
 sudo cp scripts/10-custom-welcome.sh /etc/update-motd.d/10-custom-welcome
 sudo chmod +x /etc/update-motd.d/10-custom-welcome
 ```
 
 Script source: `scripts/10-custom-welcome.sh`
 
-### 4.7 MacBook Client Aliases
+### 4.7 Client Aliases
 
 ```bash
 # ~/.zshrc
@@ -376,8 +374,8 @@ The system uses three free-tier LLM providers. API keys are stored in `~/.opencl
 
 ```bash
 # Required keys (stored in ~/.openclaw/.env)
-GROQ_API_KEY=gsk_...          # Primary model — fast chat
-GEMINI_API_KEY=AIza...         # Web search + fallback
+GROQ_API_KEY=gsk_...            # Primary model — fast chat
+GEMINI_API_KEY=AIza...           # Web search + fallback
 OPENROUTER_API_KEY=sk-or-v1-... # Free fallback
 ```
 
@@ -424,7 +422,7 @@ Web search configuration:
 | Gateway auth | Token (recommended) | 64-character cryptographic token |
 | Tailscale exposure | Serve (private) | NOT Funnel (which would be public) |
 | Service runtime | Node (recommended) | Bun has memory corruption on long-lived WebSocket connections |
-| Chat channel | Telegram | Bot: `@rpi5_mropenclaw_bot` |
+| Chat channel | Telegram | Created via @BotFather |
 | DM access policy | Pairing (default) | Bot ignores all messages until a terminal-generated code is sent |
 
 ### 5.5 Claudius — The Persona
@@ -435,7 +433,7 @@ The bot's identity is defined across several workspace files:
 |------|---------|
 | `IDENTITY.md` | Name, role, hardware, model stack |
 | `SOUL.md` | Deep behavioral rules — confidence, honesty, destructive command gating |
-| `USER.md` | Operator profile — Andrew's background, preferences, timezone |
+| `USER.md` | Operator profile — background, preferences, timezone |
 | `AGENTS.md` | Model routing strategy, trigger phrases, fallback instructions, capabilities |
 | `MEMORY.md` | Long-term setup context persisted across sessions |
 | `TOOLS.md` | Environment-specific tool notes |
@@ -444,7 +442,7 @@ The bot's identity is defined across several workspace files:
 Safety guardrails baked into the persona:
 
 - **Zero Hallucination Policy:** If a file is missing or a command is ambiguous, state the limitation immediately. Do not speculate.
-- **Destructive Command Gate:** High-risk terminal commands require explicit "Go ahead, Claudius" from the operator.
+- **Destructive Command Gate:** High-risk terminal commands require explicit confirmation from the operator.
 - **Encryption/Privacy:** Gateway tokens and API keys must never be exposed outside encrypted Telegram.
 
 ### 5.6 Post-Wizard Configuration
@@ -463,10 +461,10 @@ openclaw config set agents.defaults.model.fallbacks '["google/gemini-2.5-flash",
 openclaw cron add \
   --name "Morning News Briefing" \
   --cron "0 6 * * *" \
-  --tz "America/Los_Angeles" \
+  --tz "<your_timezone>" \
   --model "google/gemini-2.5-flash" \
   --session isolated \
-  --message "Search the web for today's top news headlines — US and world. Give Andrew a brief morning briefing: 5-7 bullet points, most important stories first. Keep it concise and direct." \
+  --message "Search the web for today's top news headlines — US and world. Brief morning briefing: 5-7 bullet points, most important stories first. Keep it concise and direct." \
   --announce --channel telegram --to "<your_telegram_id>"
 ```
 
@@ -547,7 +545,7 @@ A critical lesson: the workspace `.md` files (AGENTS.md, IDENTITY.md, etc.) are 
 
 ### Mode A Cloud Grounding
 
-When Claudius needs to research something, the query goes to Gemini's servers where Google performs the search. The Pi never visits external websites. This is the primary defense against indirect prompt injection for an unattended device managed from 800 miles away.
+When Claudius needs to research something, the query goes to Gemini's servers where Google performs the search. The Pi never visits external websites. This is the primary defense against indirect prompt injection for an unattended device managed from hundreds of miles away.
 
 ### Systemd Daemons
 
@@ -572,7 +570,7 @@ Free-tier providers have strict limits. Groq allows ~30 requests/minute, Gemini 
 **Issue:** `tailscale status` crashed with bundleIdentifier error. **Root cause:** App Store sandboxing. **Fix:** Use a shell alias instead of a symlink.
 
 ### Lesson 5: .local mDNS Fails When Remote
-**Issue:** `aqn-rpios.local` hung when connecting from Seattle. **Root cause:** mDNS only works on the local network. **Fix:** Use Tailscale MagicDNS (`aqn-rpios`) or the Tailscale IP.
+**Issue:** `.local` hostname hung when connecting remotely. **Root cause:** mDNS only works on the local network. **Fix:** Use Tailscale MagicDNS or the direct Tailscale IP.
 
 ### Lesson 6: API Rate Limit Cascade
 **Issue:** All three cloud providers rate-limited simultaneously after heavy testing. **Root cause:** Rapid testing exhausted Groq (~30 RPM), Gemini (20/day), and OpenRouter (low free-tier limits) within minutes. **Fix:** Wait 15-30 minutes for limits to reset. Avoid rapid-fire testing across all providers.
@@ -594,7 +592,7 @@ Free-tier providers have strict limits. Groq allows ~30 requests/minute, Gemini 
 - Add Claude (Anthropic) as a provider for deep reasoning tasks
 
 ### Short-Term
-- Configure himalaya for email triage (Northeastern Outlook + personal Gmail)
+- Configure himalaya for email triage (school + personal Gmail)
 - Expand the morning briefing cron job to include calendar and email digest
 - Create interview prep workflows with Claude
 
@@ -625,4 +623,4 @@ rpi5-openclaw-assistant/
 
 ---
 
-*First-generation college student, MSCS candidate at Northeastern University. Building the infrastructure that scales AI.*
+*Andrew Nguyen ([@aqn96](https://github.com/aqn96)) — First-generation college student, MSCS candidate. Building the infrastructure that scales AI.*
