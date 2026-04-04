@@ -50,8 +50,8 @@ This is the most important architectural decision in the project. Rather than ru
 │                    OPERATOR (Remote Location)                       │
 │                                                                     │
 │   ┌───────────┐         ┌──────────────┐                            │
-│   │ Telegram   │         │ Laptop      │                            │
-│   │ (Phone)    │         │ (SSH / TUI) │                            │
+│   │ Telegram  │         │ Laptop       │                            │
+│   │ (Phone)   │         │ (SSH / TUI)  │                            │
 │   └─────┬─────┘         └──────┬───────┘                            │
 │         │                      │                                    │
 └─────────┼──────────────────────┼────────────────────────────────────┘
