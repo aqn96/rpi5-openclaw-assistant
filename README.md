@@ -50,8 +50,8 @@ This is the most important architectural decision in the project. Rather than ru
 │                    OPERATOR (Remote Location)                       │
 │                                                                     │
 │   ┌───────────┐         ┌──────────────┐                            │
-│   │ Telegram   │         │ Laptop       │                            │
-│   │ (Phone)    │         │ (SSH / TUI)  │                            │
+│   │ Telegram   │         │ Laptop      │                            │
+│   │ (Phone)    │         │ (SSH / TUI) │                            │
 │   └─────┬─────┘         └──────┬───────┘                            │
 │         │                      │                                    │
 └─────────┼──────────────────────┼────────────────────────────────────┘
@@ -62,29 +62,29 @@ This is the most important architectural decision in the project. Rather than ru
 │         ▼                      ▼       RASPBERRY PI 5 (Primary Site)│
 │                                                                     │
 │   ┌──────────────────────────────────────────────┐                  │
-│   │          OpenClaw Gateway (:18789)            │                  │
+│   │          OpenClaw Gateway (:18789)           │                  │
 │   │                                              │                  │
-│   │   • Bound to 127.0.0.1 (loopback)           │                  │
+│   │   • Bound to 127.0.0.1 (loopback)            │                  │
 │   │   • Proxied via Tailscale Serve (HTTPS)      │                  │
 │   │   • Auth: 64-char cryptographic token        │                  │
 │   │   • Telegram allowlist: [<your_telegram_id>] │                  │
 │   │   • Runtime: Node.js 22 (systemd daemon)     │                  │
 │   └───────┬──────────┬───────────┬───────────────┘                  │
-│           │          │           │                                   │
-│           ▼          ▼           ▼                                   │
-│   ┌────────────┐ ┌─────────────────┐ ┌──────────────────┐          │
-│   │ Groq       │ │ Google Gemini   │ │ OpenRouter       │          │
-│   │ (PRIMARY)  │ │ (WEB SEARCH)    │ │ (FALLBACK)       │          │
-│   │            │ │                 │ │                   │          │
-│   │ Llama 3.3  │ │ Gemini 2.5      │ │ Llama 3.3 70B    │          │
-│   │ 70B        │ │ Flash           │ │ :free             │          │
-│   │ Free tier  │ │ 20 req/day      │ │ Free tier         │          │
-│   │ ~30 RPM    │ │ Google Search   │ │ Rate limited      │          │
-│   │            │ │ Grounding       │ │ Last resort       │          │
-│   └────────────┘ └─────────────────┘ └──────────────────┘          │
+│           │          │           │                                  │
+│           ▼          ▼           ▼                                  │
+│   ┌────────────┐ ┌─────────────────┐ ┌──────────────────┐           │
+│   │ Groq       │ │ Google Gemini   │ │ OpenRouter       │           │
+│   │ (PRIMARY)  │ │ (WEB SEARCH)    │ │ (FALLBACK)       │           │
+│   │            │ │                 │ │                  │           │
+│   │ Llama 3.3  │ │ Gemini 2.5      │ │ Llama 3.3 70B    │           │
+│   │ 70B        │ │ Flash           │ │ :free            │           │
+│   │ Free tier  │ │ 20 req/day      │ │ Free tier        │           │
+│   │ ~30 RPM    │ │ Google Search   │ │ Rate limited     │           │
+│   │            │ │ Grounding       │ │ Last resort      │           │
+│   └────────────┘ └─────────────────┘ └──────────────────┘           │
 │                                                                     │
 │   Automatic Failover Chain:                                         │
-│   Groq (primary) → Gemini (fallback #1) → OpenRouter (fallback #2) │
+│   Groq (primary) → Gemini (fallback #1) → OpenRouter (fallback #2)  │
 │                                                                     │
 │   Background Services:                                              │
 │   tailscaled, fail2ban, openclaw-gateway                            │
