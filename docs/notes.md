@@ -88,6 +88,39 @@ Or via brew: `brew services restart ollama` after setting the env.
 **Root cause:** Workspace files are LLM instructions (suggestions), not configuration. Routing lives in `openclaw.json`.
 **Fix:** `openclaw.json` controls actual routing. `.md` files only influence what the model suggests.
 
+### Issue 16: Responses Get Slower the Longer a Session Goes
+**Symptom:** First few messages are fast (10-15s), but later in the same conversation responses take 60-150s+.
+**Root cause:** Every response requires re-processing the entire conversation history from the beginning (that's how transformer inference works). Context grows with each turn → prefill time grows → responses slow down. Auto-compaction is supposed to summarize and trim old turns, but it never fires because Ollama doesn't report token counts — `contextTokens` stays null in the session store, so the threshold check (`contextTokens > contextWindow - reserveTokens`) never evaluates to true.
+**Fix:**
+```bash
+openclaw config set session.reset.idleMinutes 30
+openclaw config set agents.defaults.contextPruning.mode "cache-ttl"
+```
+- `idleMinutes: 30` — auto-resets session context after 30 min of no activity
+- `cache-ttl` pruning — prunes old tool results from context during long active sessions, works without token counts
+**Best practice:** Use `/reset` or `/new` in Telegram when coming back after a break or switching topics.
+
+### Issue 17: Cold Load Lag (~45s) After Model Has Been Idle
+**Symptom:** First message after a long idle period takes ~45-110s; subsequent messages are fast.
+**Root cause:** Ollama unloads the model from GPU memory after `OLLAMA_KEEP_ALIVE` expires. The next request triggers a full reload from disk into GPU memory.
+**This is intentional** — keeping the model loaded 24/7 would overheat the Mac. The cold load is the trade-off.
+**OLLAMA_KEEP_ALIVE on Mac:**
+```bash
+launchctl setenv OLLAMA_KEEP_ALIVE "10m"   # unload after 10 min idle (recommended)
+brew services restart ollama
+```
+Do NOT set to `-1` (infinite) — that keeps the model in GPU memory forever and will overheat the Mac during long idle periods.
+**To revert an accidental `-1`:**
+```bash
+launchctl unsetenv OLLAMA_KEEP_ALIVE
+brew services restart ollama
+```
+
+### Issue 18: Web Search Requests Are Slower Than Regular Chat
+**Symptom:** Asking for news or web lookups takes noticeably longer than casual conversation.
+**Root cause:** Web search is a two-model pipeline: qwen3:8b decides to search and frames the query → Gemini 2.5 Flash performs the Google grounding search (~15s) → qwen3:8b reads the results and writes the response. Total latency = inference time + ~15s Gemini round-trip.
+**This is expected behavior** — no fix needed. Mode A grounding (Gemini fetches, Pi never visits sites) is a deliberate security decision.
+
 ---
 
 ## Model Selection Notes
@@ -122,7 +155,6 @@ All models tested for real-time chat via OpenClaw. Conclusion: Pi 5 CPU cannot d
 - Install `uv` to unblock himalaya (email), summarize, and nano-pdf skills
 - Configure persistent journald logging with a 50MB cap
 - Implement SSH key auth and disable password auth
-- Set OLLAMA_KEEP_ALIVE shorter (currently 10m) if Mac heat is a concern during heavy use
 
 ### Short-Term
 - Configure himalaya for email triage (school + personal Gmail)

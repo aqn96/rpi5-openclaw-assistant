@@ -200,6 +200,58 @@ Bun tested and rejected: memory corruption on long-lived WebSocket connections a
 
 ---
 
+## Session Management & Performance Tuning
+
+### Why sessions get slower over time
+
+Every response requires Ollama to re-process the entire conversation history from scratch (transformer prefill). A 20-turn session prefills ~10x more tokens than a 2-turn session, even for a one-line reply. This is fundamental to how LLMs work — there's no "memory" between tokens.
+
+Auto-compaction is supposed to summarize and discard old turns, but Ollama doesn't report token counts in its API responses. OpenClaw's compaction threshold (`contextTokens > contextWindow - reserveTokens`) never fires because `contextTokens` stays null.
+
+### Session config (openclaw.json)
+
+```json
+"session": {
+  "reset": {
+    "idleMinutes": 30
+  }
+},
+"agents": {
+  "defaults": {
+    "contextPruning": {
+      "mode": "cache-ttl"
+    }
+  }
+}
+```
+
+- `idleMinutes: 30` — auto-resets session context after 30 min of inactivity
+- `cache-ttl` pruning — prunes old tool results from context during long active sessions (works without token counts)
+
+### Best practices
+
+- Use `/reset` or `/new` in Telegram when coming back after a break or switching topics
+- Both commands are aliases — either works
+- After a gateway restart, send `/reset` to clear accumulated context
+
+### OLLAMA_KEEP_ALIVE (Mac)
+
+Controls how long Ollama keeps the model loaded in GPU memory after the last request.
+
+```bash
+launchctl setenv OLLAMA_KEEP_ALIVE "10m"
+brew services restart ollama
+```
+
+| Setting | Behavior |
+|---------|----------|
+| `10m` | Unload after 10 min idle — recommended. Mac cools down between sessions. |
+| `-1` | Never unload — avoid. Keeps GPU occupied 24/7, overheats Mac during long idle. |
+
+Trade-off: after the model unloads, the first request takes ~45s to reload. That's the cost of keeping the Mac cool.
+
+---
+
 ## Scheduled Automation
 
 ```
