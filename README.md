@@ -97,6 +97,9 @@ This is the most important architectural decision in the project. Rather than ru
 │                                                                     │
 │   Scheduled Jobs:                                                   │
 │   Morning News Briefing (6 AM daily via Gemini)                     │
+│                                                                     │
+│   Coding Agent (on-demand):                                         │
+│   Claude Code 2.1.92 — SSH from Mac → Pi filesystem                 │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -157,11 +160,12 @@ openclaw cron add \
   --tz "<your_timezone>" \
   --model "google/gemini-2.5-flash" \
   --session isolated \
+  --tools web_search \
   --message "Search the web for today's top news headlines — US and world. Give a brief morning briefing: 5-7 bullet points, most important stories first. Keep it concise and direct." \
   --announce --channel telegram --to "<your_telegram_id>"
 ```
 
-This uses 1 of the 20 daily Gemini requests, leaving 19 for manual web searches.
+The `--tools web_search` flag (added in 2026.4.1) restricts the cron job to only the web search tool, preventing the scheduled agent from accidentally triggering exec or file operations. This uses 1 of the 20 daily Gemini requests, leaving 19 for manual web searches.
 
 ### 2.6 Why Node.js?
 
@@ -190,7 +194,8 @@ Node.js acts as the "nervous system" connecting multiple cloud LLM providers to 
 |-------|-----------|---------|
 | OS | Raspberry Pi OS 64-bit (Debian 12 Bookworm) | Base operating system |
 | Runtime | Node.js 22 LTS | Required by OpenClaw agent framework |
-| AI Agent | OpenClaw 2026.3.1 | Orchestrates LLMs, tools, and messaging channels |
+| AI Agent | OpenClaw 2026.4.2 | Orchestrates LLMs, tools, and messaging channels |
+| Coding Agent | Claude Code 2.1.92 | Remote coding via SSH — installed on Pi, accessed from Mac |
 | Primary LLM | Groq Llama 3.3 70B | Fast free-tier cloud inference for daily chat |
 | Web Search LLM | Google Gemini 2.5 Flash | Web-grounded research via Google Search Grounding |
 | Fallback LLM | OpenRouter Llama 3.3 70B (free) | Last-resort provider when others are rate-limited |
@@ -391,11 +396,18 @@ Model configuration in `openclaw.json`:
           "google/gemini-2.5-flash",
           "openrouter/meta-llama/llama-3.3-70b-instruct:free"
         ]
+      },
+      "compaction": {
+        "mode": "safeguard",
+        "model": "groq/llama-3.3-70b-versatile",
+        "notifyUser": false
       }
     }
   }
 }
 ```
+
+`compaction.model` (added in 2026.4.1) explicitly pins context compaction to Groq, preventing it from defaulting to a slower or quota-consuming model. `compaction.notifyUser: false` suppresses the `🧹 Compacting context...` message in Telegram, which appeared mid-conversation and was noisy.
 
 Web search configuration:
 
@@ -411,6 +423,20 @@ Web search configuration:
   }
 }
 ```
+
+Rate limit tuning (added in 2026.4.1) — caps same-provider retries before falling through to the next provider in the chain:
+
+```json
+{
+  "auth": {
+    "cooldowns": {
+      "rateLimitedProfileRotations": 1
+    }
+  }
+}
+```
+
+Setting this to `1` means Groq will be tried once on a rate limit before the failover chain moves to Gemini, rather than exhausting retries on the same provider first.
 
 ### 5.4 Onboarding Wizard — Key Choices
 
@@ -457,13 +483,14 @@ openclaw config set agents.defaults.model.primary "groq/llama-3.3-70b-versatile"
 # Configure fallback chain
 openclaw config set agents.defaults.model.fallbacks '["google/gemini-2.5-flash", "openrouter/meta-llama/llama-3.3-70b-instruct:free"]'
 
-# Set up daily morning news briefing
+# Set up daily morning news briefing (--tools restricts job to web_search only)
 openclaw cron add \
   --name "Morning News Briefing" \
   --cron "0 6 * * *" \
   --tz "<your_timezone>" \
   --model "google/gemini-2.5-flash" \
   --session isolated \
+  --tools web_search \
   --message "Search the web for today's top news headlines — US and world. Brief morning briefing: 5-7 bullet points, most important stories first. Keep it concise and direct." \
   --announce --channel telegram --to "<your_telegram_id>"
 ```
@@ -487,9 +514,12 @@ openclaw cron add \
 systemctl --user status openclaw-gateway    # Check status
 systemctl --user restart openclaw-gateway   # Restart after config changes
 openclaw doctor                             # Full diagnostic
+openclaw doctor --fix                       # Auto-migrate breaking config changes (run after upgrades)
 openclaw cron list                          # View scheduled jobs
 openclaw cron status                        # Check scheduler status
 ```
+
+**Upgrading OpenClaw:** After running `sudo npm install -g openclaw@latest`, always run `openclaw doctor --fix` before restarting the gateway. Starting with 2026.4.2, some plugin config paths moved (e.g. Firecrawl web fetch, xAI search) and `--fix` handles the migration automatically.
 
 ## 6. Phase 3 — Security Hardening
 
@@ -584,17 +614,24 @@ Free-tier providers have strict limits. Groq allows ~30 requests/minute, Gemini 
 ### Lesson 9: .md Files Don't Route Models
 **Issue:** Trigger phrases in AGENTS.md were expected to automatically switch models. **Root cause:** The `.md` files are LLM instructions (suggestions), not config. Actual routing lives in `openclaw.json`. **Fix:** Keep both in sync — `.md` files for LLM guidance, `openclaw.json` for actual failover.
 
+### Lesson 10: Exec Defaults Changed to YOLO Mode (2026.4.2)
+**Issue:** After upgrading to 2026.4.2, exec commands on the gateway/node no longer prompt for confirmation. **Root cause:** The 2026.4.2 release changed the gateway exec default to `security=full, ask=off` (YOLO mode). On an unattended Pi, this means shell commands sent via Telegram execute without an approval prompt. **Fix:** Explicitly set exec approval policy in `~/.openclaw/exec-approvals.json` or via `openclaw config` if you want confirmation gating. The SOUL.md destructive-command gate still applies as a model-layer check, but it is not a hard system block.
+
+### Lesson 11: Breaking Config Path Migration Required After 2026.4.2 Upgrade
+**Issue:** After upgrading, Firecrawl web fetch or xAI search configs silently stop working. **Root cause:** 2026.4.2 moved these from core `tools.web.*` paths to plugin-owned `plugins.entries.*` paths. **Fix:** Run `openclaw doctor --fix` immediately after upgrading — it detects and migrates legacy config paths automatically. Make this part of the upgrade routine.
+
 ## 9. Future Plans
 
 ### Immediate
 - Install `uv` and Homebrew to unblock himalaya, summarize, and nano-pdf skills
 - Configure persistent journald logging with a 50MB cap
-- Add Claude (Anthropic) as a provider for deep reasoning tasks
+- Apply 2026.4.2 config optimizations: `compaction.model`, `compaction.notifyUser`, `auth.cooldowns.rateLimitedProfileRotations`
+- Review exec approval policy after 2026.4.2 YOLO mode default change
 
 ### Short-Term
 - Configure himalaya for email triage (school + personal Gmail)
 - Expand the morning briefing cron job to include calendar and email digest
-- Create interview prep workflows with Claude
+- Create interview prep workflows using Claude Code (now installed on Pi — use via SSH from Mac)
 
 ### Long-Term
 - Migrate state directory to a USB SSD to reduce SD card wear
