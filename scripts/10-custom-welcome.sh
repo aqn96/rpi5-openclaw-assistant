@@ -16,7 +16,7 @@ echo -e "${C_CYAN}${C_BOLD}"
 figlet -f big "CLAUDIUS"
 echo -e "${C_RESET}"
 echo -e "  ${C_WHITE}${C_BOLD}MrOpenClaw${C_RESET}${C_DIM} — Raspberry Pi 5 Command Center${C_RESET}"
-echo -e "  ${C_DIM}OpenClaw 2026.4.2  ·  Groq · Gemini · OpenRouter  ·  Tailscale${C_RESET}"
+echo -e "  ${C_DIM}OpenClaw 2026.3.1  ·  qwen3:8b · Gemini · Tailscale${C_RESET}"
 echo ""
 
 # ── System stats ──────────────────────────────────────────────────────────────
