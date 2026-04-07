@@ -1,30 +1,52 @@
 # rpi5-openclaw-assistant
 
-> A Raspberry Pi 5 running 24/7 as a personal AI assistant — accessible from anywhere via Tailscale, controllable through Telegram. The Pi is the gateway; the brain is a local LLM running on a MacBook Pro over the same private network.
+> A Raspberry Pi 5 running 24/7 as a personal AI assistant — accessible from anywhere via Tailscale, controllable through two dedicated Telegram bots. The Pi is the always-on gateway; inference is split between a local Mac (free, private) and Claude Code via Anthropic (subscription-backed coding agent).
 
 **Author:** Andrew Nguyen ([@aqn96](https://github.com/aqn96))
 **Status:** Active — Pi in California, operator remote in Seattle
-**Bot:** MrOpenClaw (codename: Claudius)
 
-## What It Does
+## Two-Bot Architecture
 
-- Responds to natural language commands via Telegram from anywhere in the world
+| Bot | Name | Purpose | Model |
+|-----|------|---------|-------|
+| Bot 1 | Claudius (MrOpenClaw) | General assistant — chat, web search, Pi tools, morning briefing | qwen3:8b local on Mac |
+| Bot 2 | Apollius | Coding agent — full Claude Code CLI session on Pi | Claude Sonnet (Anthropic, Claude Pro subscription) |
+
+### Bot 1 — Claudius (General Assistant)
+
+- Responds to natural language via Telegram from anywhere
 - Searches the live web via Gemini's Google Search Grounding (Pi never visits external sites)
-- Runs terminal commands on the Pi with confirmation gating for destructive operations
-- Delivers a daily morning news briefing at 6 AM (Pacific) via scheduled cron job
-- Tracks GitHub repos, commits, and PRs via the authenticated `gh` CLI
-- Reports system health (CPU temp, RAM, disk, network) on demand
-- Remembers context across sessions via the session-memory hook
+- Runs terminal commands on the Pi with confirmation gating
+- Delivers a daily morning news briefing at 6 AM (Pacific)
+- Tracks GitHub repos, commits, and PRs via `gh` CLI
+- Reports system health on demand
+- Remembers context across sessions via session-memory hook
+- **Free to run** — inference on local Mac via Ollama, Gemini free tier for web search
+
+### Bot 2 — Apollius (Coding Agent)
+
+- Full Claude Code CLI session running on the Pi, accessible via Telegram
+- Direct Telegram → Claude Code path — no local model in the middle
+- Runs as a persistent systemd service (`apollius.service`) backed by a tmux PTY
+- Requires Claude Pro subscription ($20/month) — uses Anthropic's servers
+- Custom slash commands defined in `~/CLAUDE.md`:
+  - `/commands` — list available commands
+  - `/health` — Pi system health (disk, RAM, CPU temp, uptime)
+  - `/reset` — clear session memory and start fresh
+  - `/restart` — restart the Apollius service
+  - `/clear` — wipe full conversation history (built-in)
+  - `/compact` — compress long conversation history (built-in)
+- `--dangerously-skip-permissions` enabled — CLAUDE.md handles application-level approval logic instead
+- Approval logic: clarify intent first, ask before destructive/irreversible actions only
 
 ## Model Stack
 
 | Role | Model | Where |
 |------|-------|-------|
-| Primary | `qwen3:8b` | MacBook Pro (Apple Silicon, 18GB) via Tailscale |
+| Claudius primary | `qwen3:8b` | MacBook Pro (Apple Silicon, 18GB) via Tailscale |
+| Apollius coding agent | `claude-sonnet-4-6` | Anthropic API (Claude Pro subscription) |
 | Web search + 6 AM cron | `gemini-2.5-flash` | Google API (Mode A grounding) |
 | Offline emergency | `qwen3:1.7b` | Pi locally (not in routing chain) |
-
-No cloud LLM fallbacks — by design. See [docs/architecture.md](docs/architecture.md).
 
 ## Hardware
 
@@ -42,10 +64,10 @@ No cloud LLM fallbacks — by design. See [docs/architecture.md](docs/architectu
 |-------|-----------|
 | OS | Raspberry Pi OS 64-bit (Debian 12 Bookworm) |
 | Runtime | Node.js 22 LTS |
-| AI Agent | OpenClaw 2026.3.1 (systemd daemon on Pi) |
+| General Agent | OpenClaw 2026.3.1 (systemd daemon) |
+| Coding Agent | Claude Code CLI v2.1.92 (systemd daemon via tmux PTY) |
 | LLM Runtime | Ollama on Mac (Metal GPU acceleration) |
 | Primary Model | qwen3:8b — tool calling, instruction following |
-| Coding Agent | Claude Code — SSH from Mac → Pi |
 | VPN | Tailscale (WireGuard mesh, MagicDNS) |
 | SSH Protection | Fail2Ban (3 attempts → 1h ban) |
 | Version Control | GitHub CLI (`gh`) as [@aqn96](https://github.com/aqn96) |
@@ -84,7 +106,7 @@ sudo cp scripts/10-custom-welcome.sh /etc/update-motd.d/10-custom-welcome
 sudo chmod +x /etc/update-motd.d/10-custom-welcome
 ```
 
-### Phase 2 — AI Agent Layer (Pi)
+### Phase 2 — Claudius (General Assistant Bot)
 
 ```bash
 # Node.js 22
@@ -94,11 +116,14 @@ sudo apt-get install -y nodejs
 # OpenClaw
 sudo npm install -g openclaw@latest
 openclaw onboard --install-daemon
-# Wizard choices: local gateway, loopback bind, token auth,
+# Wizard: local gateway, loopback bind, token auth,
 # Tailscale Serve (NOT Funnel), Node runtime, Telegram channel
 
 # Lock bot to your Telegram ID
 openclaw config set channels.telegram.allowFrom "['<your_telegram_id>']"
+
+# Enable streaming so responses appear progressively in Telegram
+openclaw config set channels.telegram.streaming partial
 
 # Point to Mac Ollama (replace with your Mac's Tailscale IP)
 openclaw config set models.providers.ollama.baseUrl "http://<mac-tailscale-ip>:11434"
@@ -108,6 +133,10 @@ openclaw config set models.providers.ollama.models \
   '[{"id":"qwen3:8b","name":"Qwen3 8B","contextWindow":32768,"maxTokens":8192,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}]'
 openclaw config set agents.defaults.model.primary "ollama/qwen3:8b"
 openclaw config set agents.defaults.model.fallbacks '[]'
+
+# Session management — auto-reset after 30 min idle
+openclaw config set session.reset.idleMinutes 30
+openclaw config set agents.defaults.contextPruning.mode "cache-ttl"
 
 # Morning news briefing (6 AM daily, Gemini with web search)
 openclaw cron add \
@@ -142,31 +171,97 @@ launchctl setenv OLLAMA_KEEP_ALIVE "10m"
 brew services restart ollama
 ```
 
-### Phase 4 — Security Hardening
+### Phase 4 — Apollius (Coding Agent Bot)
+
+Requires Claude Pro subscription ($20/month) and Claude Code CLI installed.
+
+```bash
+# Install Bun (required by Telegram plugin)
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+
+# Install the Telegram plugin for Claude Code
+claude plugin install telegram@claude-plugins-official
+
+# Save bot token
+mkdir -p ~/.claude/channels/telegram
+echo "TELEGRAM_BOT_TOKEN=<your_bot_token>" > ~/.claude/channels/telegram/.env
+chmod 600 ~/.claude/channels/telegram/.env
+
+# Pre-trust home directory (avoids interactive dialog on service start)
+# Add to ~/.claude/settings.json:
+# { "enabledPlugins": {"telegram@claude-plugins-official": true}, "trustedDirectories": ["/home/<user>"] }
+
+# Create CLAUDE.md in home dir — defines slash commands and behavior rules
+# See ~/CLAUDE.md in this repo
+
+# Create wrapper script for systemd (needs tmux for real PTY)
+sudo apt install tmux
+cat > ~/.local/bin/apollius-start.sh << 'EOF'
+#!/bin/bash
+export PATH="$HOME/.bun/bin:$PATH"
+tmux kill-session -t apollius 2>/dev/null
+tmux new-session -d -s apollius "claude --channels plugin:telegram@claude-plugins-official --dangerously-skip-permissions"
+for i in $(seq 1 20); do
+    sleep 2
+    PANE=$(tmux capture-pane -t apollius -p 2>/dev/null)
+    if echo "$PANE" | grep -q "Yes, I trust this folder"; then
+        tmux send-keys -t apollius "1" ""
+    elif echo "$PANE" | grep -q "Yes, I accept"; then
+        tmux send-keys -t apollius "2" ""
+    elif echo "$PANE" | grep -q "Listening for channel"; then
+        break
+    fi
+done
+EOF
+chmod +x ~/.local/bin/apollius-start.sh
+
+# Install as systemd user service
+# See ~/.config/systemd/user/apollius.service
+
+systemctl --user daemon-reload
+systemctl --user enable apollius
+systemctl --user start apollius
+```
+
+First-time pairing (one-time):
+```bash
+# DM your bot on Telegram → it replies with a 6-char code
+# Then inside a Claude Code session:
+/telegram:access pair <code>
+/telegram:access policy allowlist
+```
+
+### Phase 5 — Security Hardening
 
 See [docs/architecture.md](docs/architecture.md#security-layers) for the full security model.
 
 Key decisions:
-- Gateway bound to `127.0.0.1`, exposed only via Tailscale Serve (private HTTPS)
-- Telegram `allowFrom` restricts access to a single user ID
+- Claudius gateway bound to `127.0.0.1`, exposed only via Tailscale Serve (private HTTPS)
+- Both bots locked to a single Telegram user ID via allowlist policy
 - Mode A web search — Gemini fetches content, Pi never visits external sites
-- Ollama on Mac only reachable via Tailscale (private network, not public internet)
+- Ollama on Mac only reachable via Tailscale (not public internet)
+- Apollius runs `--dangerously-skip-permissions` but CLAUDE.md enforces approval logic
 
 ## Service Management
 
 ```bash
-# Pi
-systemctl --user status openclaw-gateway    # Check status
-systemctl --user restart openclaw-gateway   # Restart after config changes
-openclaw doctor                             # Full diagnostic
-openclaw doctor --fix                       # Auto-migrate breaking config changes
-openclaw models list                        # Verify model routing
-openclaw cron list                          # View scheduled jobs
+# Claudius (OpenClaw)
+systemctl --user status openclaw-gateway
+systemctl --user restart openclaw-gateway
+openclaw doctor
+openclaw doctor --fix
+openclaw models list
 
-# Mac
-brew services list | grep ollama            # Check Ollama status
-ollama list                                 # List available models
-ollama ps                                   # Check active inference
+# Apollius (Claude Code)
+systemctl --user status apollius
+systemctl --user restart apollius
+tmux attach -t apollius          # Attach to live session for debugging
+
+# Mac (Ollama)
+brew services list | grep ollama
+ollama list
+ollama ps
 ```
 
 ## Repository Structure

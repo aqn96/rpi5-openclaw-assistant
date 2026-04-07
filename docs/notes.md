@@ -121,6 +121,17 @@ brew services restart ollama
 **Root cause:** Web search is a two-model pipeline: qwen3:8b decides to search and frames the query → Gemini 2.5 Flash performs the Google grounding search (~15s) → qwen3:8b reads the results and writes the response. Total latency = inference time + ~15s Gemini round-trip.
 **This is expected behavior** — no fix needed. Mode A grounding (Gemini fetches, Pi never visits sites) is a deliberate security decision.
 
+### Issue 19: Responses Feel Slow / Silent Until Complete
+**Symptom:** No response visible in Telegram for 30-90s, then the full message appears at once. Sometimes appears dropped.
+**Root cause:** `channels.telegram.streaming` was set to `"off"` — the entire response must finish generating before Telegram receives anything.
+**Fix:** `openclaw config set channels.telegram.streaming partial` then restart the gateway. With `partial`, Telegram shows a message that updates as tokens stream in.
+
+### Issue 20: Ollama Inference Queue Hangs (All Requests Blocked)
+**Symptom:** Telegram bot goes completely silent. `curl http://<mac-ip>:11434/api/ps` shows model loaded, but `curl .../api/generate` times out after 90s+.
+**Root cause:** A previous request got stuck mid-inference (e.g. from mid-flight model-switching or a session that timed out with streaming off). Ollama queues all new requests behind it — they never execute.
+**Fix:** Restart Ollama on the Mac: `brew services restart ollama`
+**Note:** OpenClaw has no inference timeout config — this cannot be auto-handled from the Pi side. Manual restart on the Mac is the only recovery path.
+
 ---
 
 ## Model Selection Notes

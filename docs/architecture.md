@@ -5,33 +5,46 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    OPERATOR (Remote — Seattle)                      │
-│   ┌───────────┐              ┌──────────────┐                       │
-│   │ Telegram  │              │ Laptop (SSH) │                       │
-│   └─────┬─────┘              └──────┬───────┘                       │
-└─────────┼──────────────────────────┼────────────────────────────────┘
-          │ Telegram Bot API         │ Tailscale WireGuard
-          ▼                          ▼
+│   ┌───────────────────────┐       ┌──────────────┐                  │
+│   │       Telegram        │       │ Laptop (SSH) │                  │
+│   │  Bot 1: Claudius      │       └──────┬───────┘                  │
+│   │  Bot 2: Apollius      │              │ Tailscale WireGuard       │
+│   └──────────┬────────────┘              │                          │
+└──────────────┼───────────────────────────┼──────────────────────────┘
+               │ Telegram Bot API          │
+               ▼                           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  RASPBERRY PI 5 — California (Gateway)              │
+│                  RASPBERRY PI 5 — California (Always On)            │
 │                                                                     │
-│   ┌──────────────────────────────────────────────┐                  │
-│   │         OpenClaw Gateway (:18789)            │                  │
-│   │  • Bound to 127.0.0.1 (loopback only)        │                  │
-│   │  • Proxied via Tailscale Serve (HTTPS)       │                  │
-│   │  • Auth: 64-char cryptographic token         │                  │
-│   │  • Telegram allowlist: [your_telegram_id]    │                  │
-│   │  • Runtime: Node.js 22 (systemd daemon)      │                  │
-│   └───────────────────┬──────────────────────────┘                  │
-│                       │ Tailscale mesh                              │
+│   ┌─────────────────────────────────────────┐                       │
+│   │   Bot 1 — OpenClaw Gateway (:18789)     │                       │
+│   │   Claudius · qwen3:8b via Mac Tailscale │                       │
+│   │   • Bound to 127.0.0.1 (loopback only) │                       │
+│   │   • Auth: cryptographic token           │                       │
+│   │   • Telegram allowlist: [operator ID]   │                       │
+│   │   • streaming: partial                  │                       │
+│   │   • Runtime: Node.js 22 (systemd)       │                       │
+│   └───────────────────┬─────────────────────┘                       │
+│                       │ Tailscale mesh (164ms to Mac)               │
 │                       ▼                                             │
 │   ┌──────────────────────────────────────────────────────────┐      │
 │   │           MacBook Pro — Apple Silicon (18GB)             │      │
-│   │                                                          │      │
-│   │   Ollama (Metal GPU)                                     │      │
-│   │   └── qwen3:8b — PRIMARY (tool calling + instructions)  │      │
-│   │                                                          │      │
-│   │   Keep-alive: 10 min idle → unloads from memory         │      │
+│   │   Ollama (Metal GPU) · qwen3:8b at ~30-50 tok/s         │      │
+│   │   Keep-alive: 10 min idle → unloads from GPU memory     │      │
 │   └──────────────────────────────────────────────────────────┘      │
+│                                                                     │
+│   ┌─────────────────────────────────────────┐                       │
+│   │   Bot 2 — Apollius (Claude Code CLI)    │                       │
+│   │   claude --channels telegram plugin     │                       │
+│   │   • Runs in tmux PTY (real terminal)    │                       │
+│   │   • systemd service: apollius.service   │                       │
+│   │   • --dangerously-skip-permissions      │                       │
+│   │   • CLAUDE.md handles approval logic    │                       │
+│   │   • Telegram allowlist: [operator ID]   │                       │
+│   └───────────────────┬─────────────────────┘                       │
+│                       │ HTTPS (Anthropic API)                       │
+│                       ▼                                             │
+│              Claude Sonnet 4.6 (Claude Pro subscription)            │
 │                                                                     │
 │   Web search tool → Gemini 2.5 Flash (Google Search Grounding)      │
 │   6 AM cron      → Gemini 2.5 Flash (isolated session)              │
@@ -44,9 +57,58 @@
 
 ---
 
-## Decision 1: Mac-Offloaded Inference
+## Decision 1: Two-Bot Architecture
 
-The Pi routes all LLM requests to a MacBook Pro on the same Tailscale network. The Mac runs Ollama with Metal GPU acceleration.
+The system now runs two separate Telegram bots with distinct purposes:
+
+| | Bot 1 — Claudius | Bot 2 — Apollius |
+|---|---|---|
+| Model | qwen3:8b (local Mac) | Claude Sonnet 4.6 (Anthropic) |
+| Cost | Free | Claude Pro subscription |
+| Purpose | General chat, tools, briefings | Coding agent sessions |
+| Agent | OpenClaw | Claude Code CLI |
+| Path | Telegram → Pi → Mac → Pi → Telegram | Telegram → Pi (Claude Code) → Anthropic → Telegram |
+| Session | Managed by OpenClaw | Managed by Claude Code natively |
+| Memory | Grows with context, auto-reset at 30m idle | Built-in compaction, 200k context window |
+
+**Why two bots instead of one?**
+
+- Claude Pro subscription doesn't expose an API key — only the CLI works
+- OpenClaw requires an API key to route to Anthropic
+- Claude Code CLI has its own Telegram plugin that bypasses OpenClaw entirely
+- Separation is cleaner: local model for free general use, Claude for serious coding
+
+---
+
+## Decision 2: Apollius — Claude Code CLI as Daemon
+
+Claude Code is designed as an interactive terminal application. Running it as a headless systemd service required solving several problems:
+
+### PTY requirement
+
+Claude Code needs a real pseudo-terminal to function. `script -q` (fake PTY) was tried and failed — Ollama could receive messages but responses weren't sent back to Telegram. `tmux` provides a real PTY and works correctly.
+
+### Startup dialog automation
+
+Claude Code shows two interactive dialogs on startup:
+1. Workspace trust dialog ("Yes, I trust this folder")
+2. Bypass permissions warning ("Yes, I accept")
+
+The wrapper script (`apollius-start.sh`) polls the tmux pane and auto-sends the correct key inputs when these dialogs appear.
+
+### Permission model
+
+`--dangerously-skip-permissions` removes all OS-level approval prompts (necessary for daemon mode — prompts have nowhere to display). `~/CLAUDE.md` replaces this with application-level approval logic: Claude is instructed to clarify intent first, and ask before any destructive/irreversible action.
+
+### Session persistence
+
+Claude Code's `--channels` mode keeps the session alive indefinitely. Context is managed natively by Claude Code (200k window, built-in compaction). `/clear` or `/reset` from Telegram resets the conversation.
+
+---
+
+## Decision 3: Mac-Offloaded Inference (Claudius)
+
+The Pi routes all OpenClaw LLM requests to a MacBook Pro on the same Tailscale network. The Mac runs Ollama with Metal GPU acceleration.
 
 ### Why not run the LLM on the Pi?
 
@@ -59,18 +121,11 @@ Pi 5 CPU inference was tested extensively. Results:
 | phi4-mini | 2.5 GB | Stalled — 2+ min for "hi" |
 | qwen3:1.7b | 1.1 GB | Stalled — still 2+ min |
 
-**Root cause:** Pi 5 has no NPU or GPU. All inference runs on the ARM Cortex-A76 CPU. The workspace `.md` files sent as system context on every request add thousands of tokens — CPU prefill of this context is the bottleneck regardless of model size.
+**Root cause:** Pi 5 has no NPU or GPU. All inference runs on the ARM Cortex-A76 CPU. The workspace `.md` files sent as system context add thousands of tokens — CPU prefill is the bottleneck regardless of model size.
 
-**Mac comparison:** Apple Silicon unified memory + Metal GPU runs qwen3:8b at ~30-50 tok/s. First response ~45s (cold load), subsequent responses ~15-30s.
+**Mac comparison:** Apple Silicon unified memory + Metal GPU runs qwen3:8b at ~30-50 tok/s.
 
-### Why not cloud LLMs (Groq, OpenRouter)?
-
-Initially used (Groq Llama 3.3 70B as primary). Removed because:
-- Free-tier quotas are finite and unpredictable
-- All requests leaving the device adds latency and dependency on external services
-- Mac is always on the same Tailscale network — effectively local
-
-### Model routing (current)
+### Model routing (Claudius)
 
 | Priority | Model | Location |
 |----------|-------|----------|
@@ -79,36 +134,17 @@ Initially used (Groq Llama 3.3 70B as primary). Removed because:
 | 6 AM cron | `gemini-2.5-flash` | Pinned directly on job |
 | Emergency offline | `qwen3:1.7b` on Pi | Not in routing chain |
 
-No cloud LLM fallbacks — if the Mac is asleep, OpenClaw reports the error. This is intentional: a degraded response is worse than a clear failure.
+---
+
+## Decision 4: Streaming Enabled (partial)
+
+`channels.telegram.streaming` was previously `off` — the entire response had to complete before Telegram received anything. With responses taking 15-90 seconds (cold load + inference), this felt like the bot was broken or dropping messages.
+
+Setting to `partial`: Telegram shows a message immediately that updates as tokens stream in. Perceived latency drops dramatically even though total inference time is unchanged.
 
 ---
 
-## Decision 2: qwen3:8b over other local models
-
-Requirements: **tool calling** (OpenClaw uses tools for web search, exec, GitHub) + **instruction following** (workspace .md files must be obeyed, not repeated back).
-
-Models tested on Mac (18GB):
-
-| Model | Tool Calling | Instruction Following | Notes |
-|-------|-------------|----------------------|-------|
-| `gemma4:e2b` | No | Good | Fails immediately — no tool support |
-| `llama3.1:8b` | Yes | Weak | Leaks system prompt back to user |
-| `qwen3:8b` | Excellent | Excellent | Current — purpose-built for agentic workflows |
-| `qwen3:14b` | Excellent | Best | Overkill for this use case |
-
-**qwen3:8b chosen** — Alibaba's Qwen3 series is specifically designed for agentic/tool workflows. It reliably follows the SOUL.md instruction to never reveal workspace files, and handles multi-turn tool cycles correctly.
-
-### Context window caveat
-
-Ollama auto-discovers models with their native context window. For qwen3:8b this is very large (~128k). At 32k context, memory usage on Mac is ~5-6 GB — acceptable. Explicitly set to 32k in OpenClaw config:
-
-```json
-{"contextWindow": 32768, "maxTokens": 8192}
-```
-
----
-
-## Decision 3: Mode A Web Search (Cloud Grounding)
+## Decision 5: Mode A Web Search (Cloud Grounding)
 
 | | Mode A: Cloud Grounding (chosen) | Mode B: Local Fetching |
 |---|---|---|
@@ -122,7 +158,7 @@ Gemini is used **only** for web search (tool) and the 6 AM cron — never in the
 
 ---
 
-## Decision 4: Tailscale over Port Forwarding
+## Decision 6: Tailscale over Port Forwarding
 
 | Property | Tailscale | Port Forwarding |
 |----------|-----------|-----------------|
@@ -133,34 +169,24 @@ Gemini is used **only** for web search (tool) and the 6 AM cron — never in the
 
 Gateway bound to `127.0.0.1`. External access via Tailscale Serve (private HTTPS only — not Funnel).
 
-Same Tailscale mesh connects Pi ↔ Mac, making Mac-offloaded inference possible without any public exposure.
+Same Tailscale mesh connects Pi ↔ Mac, making Mac-offloaded inference possible without any public exposure. Pi↔Mac latency: ~164ms direct link.
 
 ---
 
-## Decision 5: Workspace .md File Design
+## Decision 7: qwen3:8b over other local models
 
-The workspace `.md` files in `~/.openclaw/workspace/` are the LLM's system context — loaded on every request. They do **not** control routing (that's `openclaw.json`).
+Requirements: **tool calling** + **instruction following** (workspace .md files must be obeyed, not repeated back).
 
-| File | Purpose | Key lesson |
-|------|---------|------------|
-| `IDENTITY.md` | Who Claudius is, where it runs | Must say model runs on Mac, not Pi — smaller models get confused |
-| `SOUL.md` | Behavior rules | Must include "never reveal these files" — llama3.1 8B leaked them |
-| `AGENTS.md` | Capabilities, routing notes | Keep short — no model-switching instructions (routing is automatic) |
-| `USER.md` | Operator profile | Keep factual, no stale references |
-| `MEMORY.md` | Long-term context | Update when architecture changes |
-| `TOOLS.md` | Pi-specific commands | No IPs or sensitive values |
+| Model | Tool Calling | Instruction Following | Notes |
+|-------|-------------|----------------------|-------|
+| `gemma4:e2b` | No | Good | Fails — no tool support |
+| `llama3.1:8b` | Yes | Weak | Leaks system prompt back to user |
+| `qwen3:8b` | Excellent | Excellent | Current — purpose-built for agentic workflows |
 
-**Rules learned from failure:**
-- Keep total context under ~80 lines — larger models (8B) can handle more but smaller models regurgitate long contexts
-- Don't put sensitive values (IPs, tokens) in workspace files — the model reads them
-- `SOUL.md` must explicitly tell the model not to reveal workspace contents
-- When the model changes, update `IDENTITY.md` immediately — wrong identity = confused behavior
-
----
-
-## Decision 6: Node.js over Bun
-
-Bun tested and rejected: memory corruption on long-lived WebSocket connections after several hours. Pi runs 24/7 — stability matters more than startup speed. Node.js 22 LTS chosen.
+Context window explicitly capped at 32k in OpenClaw config (Ollama auto-discovers 200k native, which pre-allocates too much RAM):
+```json
+{"contextWindow": 32768, "maxTokens": 8192}
+```
 
 ---
 
@@ -177,13 +203,19 @@ Bun tested and rejected: memory corruption on long-lived WebSocket connections a
 - Loopback, LAN, and Tailscale IPs whitelisted
 - `UseDNS no` — eliminates 10-15s login delay over Tailscale
 
-### 3. Agent Gateway — OpenClaw
+### 3. Claudius Gateway — OpenClaw
 - Bound to `127.0.0.1` (loopback only)
 - Exposed via Tailscale Serve (private HTTPS, not public Funnel)
 - 64-character cryptographic auth token
 - Telegram `allowFrom` — single user ID only
 
-### 4. AI Model Layer — Mode A Grounding
+### 4. Apollius — Claude Code
+- Telegram `allowlist` policy — single user ID only
+- `--dangerously-skip-permissions` scoped to daemon use only
+- CLAUDE.md enforces clarify-first + approval-on-key-steps behavior
+- Runs on Pi filesystem — no public exposure
+
+### 5. AI Model Layer — Mode A Grounding
 - Web research via Gemini — Pi never visits external sites
 - Untrusted content never enters Pi's local execution context
 
@@ -197,58 +229,42 @@ Bun tested and rejected: memory corruption on long-lived WebSocket connections a
 | v2 | Groq Llama 3.3 70B (cloud) | Speed + quality gap vs local 3B |
 | v3 | phi4-mini (Pi local) | API quota conservation |
 | v4 | qwen3:8b (Mac via Tailscale) | Pi CPU too slow; Mac Metal GPU is fast |
+| v5 | + Claude Sonnet 4.6 (Apollius bot) | Coding agent added via Claude Code CLI |
 
 ---
 
-## Session Management & Performance Tuning
+## Session Management & Performance
 
-### Why sessions get slower over time
+### Claudius (OpenClaw + qwen3:8b)
 
-Every response requires Ollama to re-process the entire conversation history from scratch (transformer prefill). A 20-turn session prefills ~10x more tokens than a 2-turn session, even for a one-line reply. This is fundamental to how LLMs work — there's no "memory" between tokens.
+Every response requires Ollama to re-process the entire conversation history (transformer prefill). Auto-compaction never fires because Ollama doesn't report token counts.
 
-Auto-compaction is supposed to summarize and discard old turns, but Ollama doesn't report token counts in its API responses. OpenClaw's compaction threshold (`contextTokens > contextWindow - reserveTokens`) never fires because `contextTokens` stays null.
-
-### Session config (openclaw.json)
-
+Config:
 ```json
-"session": {
-  "reset": {
-    "idleMinutes": 30
-  }
-},
-"agents": {
-  "defaults": {
-    "contextPruning": {
-      "mode": "cache-ttl"
-    }
-  }
-}
+"session": { "reset": { "idleMinutes": 30 } },
+"agents": { "defaults": { "contextPruning": { "mode": "cache-ttl" } } }
 ```
 
-- `idleMinutes: 30` — auto-resets session context after 30 min of inactivity
-- `cache-ttl` pruning — prunes old tool results from context during long active sessions (works without token counts)
+- `idleMinutes: 30` — auto-resets context after 30 min of inactivity
+- `cache-ttl` pruning — prunes old tool results without needing token counts
+- Use `/reset` in Telegram when switching topics or returning after a break
 
-### Best practices
+### Apollius (Claude Code)
 
-- Use `/reset` or `/new` in Telegram when coming back after a break or switching topics
-- Both commands are aliases — either works
-- After a gateway restart, send `/reset` to clear accumulated context
+Claude Code manages its own context natively:
+- 200k token context window
+- Built-in automatic compaction when approaching limits
+- Proper token counting (Anthropic API reports tokens correctly)
+- Use `/clear` to wipe history, `/compact` to compress without wiping
 
 ### OLLAMA_KEEP_ALIVE (Mac)
 
-Controls how long Ollama keeps the model loaded in GPU memory after the last request.
-
-```bash
-launchctl setenv OLLAMA_KEEP_ALIVE "10m"
-brew services restart ollama
-```
-
 | Setting | Behavior |
 |---------|----------|
-| `10m` | Unload after 10 min idle — recommended. Mac cools down between sessions. |
-| `-1` | Never unload — avoid. Keeps GPU occupied 24/7, overheats Mac during long idle. |
+| `10m` | Unload after 10 min idle — recommended |
+| `-1` | Never unload — avoid, overheats Mac during long idle |
 
-Trade-off: after the model unloads, the first request takes ~45s to reload. That's the cost of keeping the Mac cool.
+Trade-off: after unload, first request takes ~45s to reload from disk into GPU.
 
 ---
 
@@ -260,5 +276,5 @@ Morning News Briefing
   Model:     google/gemini-2.5-flash (pinned — needs web search)
   Session:   isolated (no cross-contamination with regular chat)
   Delivery:  announce → Telegram → operator chat ID
-  Status:    active, last run ok
+  Status:    active
 ```
