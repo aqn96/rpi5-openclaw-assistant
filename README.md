@@ -1,6 +1,6 @@
 # rpi5-openclaw-assistant
 
-> A Raspberry Pi 5 running 24/7 as a personal AI assistant — accessible from anywhere via Tailscale, controllable through two dedicated Telegram bots. The Pi is the always-on gateway; inference is split between a local Mac (free, private) and Claude Code via Anthropic (subscription-backed coding agent).
+> A Raspberry Pi 5 running 24/7 as a personal AI assistant — accessible from anywhere via Tailscale, controllable through two dedicated Telegram bots. **Just talk to it.** Send a voice message and Apollius transcribes it on-device (whisper.cpp), understands it, and responds — no typing required. The Pi is the always-on gateway; inference is split between a local Mac (free, private) and Claude Code via Anthropic (subscription-backed coding agent).
 
 **Author:** Andrew Nguyen ([@aqn96](https://github.com/aqn96))
 **Status:** Active — Pi in California, operator remote in Seattle
@@ -25,11 +25,13 @@
 
 ### Bot 2 — Apollius (Coding Agent)
 
+> **Talk to it.** Send a voice message on Telegram — Apollius transcribes it on-device using whisper.cpp (Q5_1 tiny, ~13s, no cloud, no API key) and responds as if you typed it. Hands-free coding assistant from anywhere.
+
 - Full Claude Code CLI session running on the Pi, accessible via Telegram
+- **Voice input** — send `.oga` Telegram voice messages, whisper.cpp transcribes on Pi, Claude responds
 - Direct Telegram → Claude Code path — no local model in the middle
 - Runs as a persistent systemd service (`apollius.service`) backed by a tmux PTY
 - Requires Claude Pro subscription ($20/month) — uses Anthropic's servers
-- **Voice message support** — whisper.cpp (Q5_1 tiny model) transcribes Telegram `.oga` voice messages on-device before Claude processes them. ~13s/clip, no cloud, no API key.
 - Custom slash commands defined in `~/CLAUDE.md`:
   - `/commands` — list available commands
   - `/health` — Pi system health (disk, RAM, CPU temp, uptime)
