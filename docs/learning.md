@@ -305,3 +305,64 @@ The Pi 5 is bad at:
 - Any compute-intensive background task alongside inference
 
 Design accordingly. Put the gateway on the Pi. Put the compute where compute lives.
+
+---
+
+## 8. Two-Bot Architecture — What Was Learned
+
+### Why a subscription CLI can't replace an API key
+
+Claude Pro ($20/month) gives you access to Claude Code CLI via OAuth. It does **not** give you an API key for programmatically calling Anthropic's API. OpenClaw requires an API key to route requests — so Claude Pro alone cannot power an OpenClaw agent.
+
+This created a constraint that led to the two-bot design:
+- **Claudius** (OpenClaw) uses a local model via Ollama — no API key needed, free
+- **Apollius** (Claude Code CLI) uses the subscription through the official CLI — no API key needed
+
+The lesson: understand what a subscription actually gives you. "Access to Claude" and "API access to Claude" are different products.
+
+### Claude Code CLI as a headless daemon
+
+Claude Code is designed for interactive terminal use. Running it headlessly (no user at the terminal) required solving three problems:
+
+**1. PTY requirement**
+Claude Code needs a real pseudo-terminal to function — it uses terminal control codes for its UI. A fake PTY (`script -q`) can receive messages but responses don't get sent back through the Telegram plugin. Only `tmux` provides a real PTY that works correctly as a daemon.
+
+**2. Startup dialogs**
+Claude Code shows interactive confirmation dialogs on startup that block execution until manually confirmed. The wrapper script polls the tmux pane and auto-sends the correct keystrokes when these dialogs appear.
+
+**3. Slash commands don't work through Telegram**
+Custom commands in `~/.claude/commands/*.md` only work in interactive terminal mode — they require the TUI to intercept the `/` prefix. When messages come in from Telegram's `--channels` plugin, they arrive as plain text. The fix: put all slash command logic in `~/CLAUDE.md` so Claude handles them via instruction following rather than the slash command system.
+
+### CLAUDE.md is the right place for behavior rules
+
+Claude Code reads `CLAUDE.md` from the working directory as part of its system context on every session. This is the correct place for:
+- Slash command definitions (what `/reset`, `/health`, `/commands` should do)
+- Approval logic (when to ask, when to just do it)
+- Response style rules (keep it short, this is Telegram)
+
+The `--dangerously-skip-permissions` flag removes OS-level approval prompts (necessary for daemon mode). `CLAUDE.md` replaces them with application-level logic that's smarter — Claude asks before destructive actions, not for every file read.
+
+### Idle cost is zero
+
+A Claude Code session in `--channels` mode sitting idle costs nothing. Anthropic only charges when the model is generating a response. Leaving the tmux session open 24/7 consumes ~50MB RAM on the Pi and zero API credits.
+
+### Context window and memory management
+
+Claude Code handles session memory far better than OpenClaw + Ollama:
+
+| | OpenClaw + qwen3:8b | Apollius (Claude Code) |
+|---|---|---|
+| Context window | 32k (capped) | 200k |
+| Auto-compaction | Broken (Ollama doesn't report token counts) | Works correctly |
+| Manual reset | `/reset` | `/clear` |
+| Cold start | ~45s (model reload) | None (Anthropic API, always warm) |
+
+The practical difference: with Ollama, you have to manually `/reset` regularly or responses slow down. With Claude Code, you can have much longer conversations before needing to clear.
+
+### Streaming vs one-shot for Telegram
+
+`streaming: off` in OpenClaw meant the entire response had to complete before Telegram received anything. With 30-90 second inference times, this looked like the bot was broken or dropping messages.
+
+`streaming: partial` sends the message immediately and edits it as tokens stream in. Same total inference time, but perceived latency drops to near-zero — the user sees the bot start typing within seconds.
+
+Always enable streaming for any chat interface where the user is waiting.
