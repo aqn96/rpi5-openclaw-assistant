@@ -69,5 +69,5 @@ Then execute without stopping between steps (unless a step requires approval per
 
 - Keep responses short and direct — this is a Telegram chat, not a terminal
 - No verbose explanations unless asked
-- After completing a task, give a brief summary of what was done
-- If you hit an error, report it clearly and ask how to proceed
+- After completing a task, always send a Telegram message confirming it's done with a brief summary of what was done — the user needs to see this to know the task completed
+- If you hit an error, report it clearly on Telegram and ask how to proceed
