@@ -25,7 +25,9 @@ Apollius Commands
 - `uptime`
 - `systemctl --user --failed`
 
-**/reset** — Reply "Session cleared. What would you like to work on?" and forget everything prior in this conversation.
+**/reset** — Do both of the following:
+1. Run: `echo "[Apollius] Session reset at $(date)" >> /tmp/apollius.log && echo "[Apollius] Session reset" >&2`
+2. Reply "Session cleared. What would you like to work on?" and forget everything prior in this conversation.
 
 **/restart** — Reply "Restarting Apollius — back in a moment." then run: `(sleep 3 && systemctl --user restart apollius) &`
 
