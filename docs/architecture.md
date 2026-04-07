@@ -80,7 +80,36 @@ The system now runs two separate Telegram bots with distinct purposes:
 
 ---
 
-## Decision 2: Apollius — Official Claude Code Channels Feature
+## Decision 2: Voice Transcription — whisper.cpp on Pi
+
+Apollius supports Telegram voice messages via whisper.cpp running on the Pi itself.
+
+| Option | Speed | Cost | Privacy | Notes |
+|--------|-------|------|---------|-------|
+| OpenAI Whisper API | ~1-2s | $0.006/min | Cloud | Requires API key, adds cost |
+| Picovoice Leopard | ~1-3s | Free tier | On-device | Less accurate, key required |
+| faster-whisper | ~5-15s | Free | On-device | Max int8 — no int4 support |
+| **whisper.cpp (chosen)** | **~13s** | **Free** | **On-device** | **MIT license, int4/Q4/Q5 support, ARM NEON** |
+
+### Why whisper.cpp over faster-whisper
+
+faster-whisper uses CTranslate2 which caps at int8 quantization. whisper.cpp (ggml backend) supports Q4 and Q5 quantized models natively on ARM.
+
+**Why Q5_1 over Q4:** The whisper.cpp model download script doesn't ship a Q4 tiny.en model — Q5_1 is the smallest available quantized English model. Q5_1 sits between int4 and int8 in size/speed, with accuracy nearly indistinguishable from fp16 on short voice clips (per March 2025 quantization study).
+
+**Why edge quantization matters:** Pi 5 has no GPU or NPU — all inference is CPU-only (ARM Cortex-A76). Q5_1 tiny reduces model size ~45% vs fp16 and inference time ~19% vs int8, making real-time-ish transcription feasible on ARM without cloud dependency.
+
+**Pipeline:**
+1. Claude Code downloads the `.oga` voice file via Telegram plugin
+2. `transcribe.sh` converts `.oga` → 16kHz mono WAV via ffmpeg
+3. whisper.cpp runs inference → plain text
+4. Claude processes the text as if it were a typed message
+
+**Installed at:** `~/whisper.cpp/` | Model: `models/ggml-tiny.en-q5_1.bin` | Script: `~/.local/bin/transcribe.sh`
+
+---
+
+## Decision 3: Apollius — Official Claude Code Channels Feature
 
 The Apollius bot uses **Claude Code Channels**, an official Anthropic feature currently in research preview (requires Claude Code v2.1.80+).
 

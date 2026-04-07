@@ -424,3 +424,61 @@ The practical difference: with Ollama, you have to manually `/reset` regularly o
 `streaming: partial` sends the message immediately and edits it as tokens stream in. Same total inference time, but perceived latency drops to near-zero — the user sees the bot start typing within seconds.
 
 Always enable streaming for any chat interface where the user is waiting.
+
+---
+
+## 10. Voice Transcription — whisper.cpp + Quantization on Edge
+
+### The problem
+
+Telegram voice messages arrive as `.oga` (Opus audio) files. Claude Code can download them but can't natively transcribe audio. Without STT, voice messages are dead — Claude gets the file path and nothing else.
+
+### Why whisper.cpp over the alternatives
+
+| Option | Int4 support | On-device | Free | Notes |
+|--------|-------------|-----------|------|-------|
+| OpenAI Whisper API | N/A (cloud) | No | No | Fast, accurate, costs money |
+| Picovoice Leopard | Yes | Yes | Free tier | Less accurate, key required |
+| faster-whisper | No (max int8) | Yes | Yes | CTranslate2 backend |
+| **whisper.cpp** | **Yes (Q4/Q5)** | **Yes** | **Yes** | **ggml backend, ARM NEON** |
+
+faster-whisper uses CTranslate2, which doesn't support int4. whisper.cpp uses ggml (same backend as llama.cpp) and has native Q4/Q5 quantization support.
+
+### Why Q5_1 instead of Q4
+
+The goal was int4 (Q4) — March 2025 research showed Q4 reduces model size 45% and latency 19% vs fp16 while preserving accuracy on short clips. However, the whisper.cpp model download script doesn't ship a Q4 `tiny.en` model. The smallest available is Q5_1 (5-bit).
+
+Q5_1 is the right call anyway:
+- Slightly better accuracy than Q4 at nearly the same model size
+- `tiny.en` is already tiny (75M params) — Q4 vs Q5_1 difference is marginal at this scale
+- On Pi 5 ARM Cortex-A76 with NEON: ~13s for a ~100s voice clip
+
+### The quantization insight
+
+The key lesson isn't "use Q5_1 specifically" — it's that quantized models on edge hardware follow a diminishing returns curve:
+
+```
+fp32 → fp16: ~2x memory reduction, no accuracy loss
+fp16 → int8: ~2x more, ~1-2% accuracy loss
+int8 → Q5:   ~1.5x more, ~1-3% more loss
+Q5   → Q4:   ~1.2x more, marginal additional loss
+```
+
+For short conversational voice clips (5-30 seconds), tiny.en Q5_1 is effectively indistinguishable from fp16. The accuracy loss only becomes noticeable on long-form audio with domain-specific vocabulary.
+
+### Pipeline
+
+```
+Telegram voice (.oga)
+  → download_attachment (Claude Code plugin)
+  → ffmpeg -ar 16000 -ac 1 -c:a pcm_s16le (convert to WAV)
+  → whisper-cli -m ggml-tiny.en-q5_1.bin (inference)
+  → plain text
+  → Claude processes as typed message
+```
+
+Total overhead vs typed message: ~13-15 seconds. Acceptable for async Telegram use.
+
+### Why not run Whisper on the Mac?
+
+The Mac runs Ollama for Claudius inference. Adding a Whisper API call from Pi → Mac adds network latency and couples the two systems. Pi-local is simpler: no network dependency, works even if Mac is asleep, zero cost per inference.

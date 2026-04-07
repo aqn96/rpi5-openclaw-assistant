@@ -29,6 +29,7 @@
 - Direct Telegram → Claude Code path — no local model in the middle
 - Runs as a persistent systemd service (`apollius.service`) backed by a tmux PTY
 - Requires Claude Pro subscription ($20/month) — uses Anthropic's servers
+- **Voice message support** — whisper.cpp (Q5_1 tiny model) transcribes Telegram `.oga` voice messages on-device before Claude processes them. ~13s/clip, no cloud, no API key.
 - Custom slash commands defined in `~/CLAUDE.md`:
   - `/commands` — list available commands
   - `/health` — Pi system health (disk, RAM, CPU temp, uptime)
