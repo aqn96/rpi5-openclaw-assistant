@@ -80,7 +80,17 @@ The system now runs two separate Telegram bots with distinct purposes:
 
 ---
 
-## Decision 2: Apollius — Claude Code CLI as Daemon
+## Decision 2: Apollius — Official Claude Code Channels Feature
+
+The Apollius bot uses **Claude Code Channels**, an official Anthropic feature currently in research preview (requires Claude Code v2.1.80+).
+
+- Official docs: https://code.claude.com/docs/en/channels
+- Plugin source: https://github.com/anthropics/claude-plugins-official/tree/main/external_plugins/telegram
+- Requires claude.ai login (Pro/Max) — API keys are explicitly NOT supported
+
+The feature is designed exactly for this use case: push Telegram messages into a running Claude Code session on your own machine, against your real files. Anthropic officially supports `--dangerously-skip-permissions` for unattended/daemon use.
+
+## Decision 3: Apollius — Claude Code CLI as Daemon
 
 Claude Code is designed as an interactive terminal application. Running it as a headless systemd service required solving several problems:
 

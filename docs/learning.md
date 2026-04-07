@@ -308,7 +308,65 @@ Design accordingly. Put the gateway on the Pi. Put the compute where compute liv
 
 ---
 
-## 8. Two-Bot Architecture — What Was Learned
+## 8. Claude Code Channels — Official Feature (Research Preview)
+
+### What channels are
+
+Channels are an official Anthropic feature (introduced ~early 2026, still in research preview as of April 2026) that lets an MCP server push events into a running Claude Code session. The session reacts and can reply back through the same channel — a two-way bridge.
+
+Official docs: https://code.claude.com/docs/en/channels
+Plugin source: https://github.com/anthropics/claude-plugins-official/tree/main/external_plugins/telegram
+
+Supported channels in the research preview: **Telegram, Discord, iMessage**
+
+### Key requirements
+
+- Claude Code v2.1.80 or later
+- **claude.ai login only** — Console API keys and `ANTHROPIC_API_KEY` are NOT supported
+- Bun runtime (the channel plugins are Bun scripts)
+- Pro or Max subscription (no organization restrictions for individual users)
+
+This is why the approach works with a $20/month Claude Pro subscription and no API key — it's designed that way. You cannot use this feature with an API key alone.
+
+### How the security model works
+
+Each channel plugin maintains a sender allowlist. Nobody can push messages without being approved:
+
+1. DM the bot → it replies with a 6-character pairing code
+2. In Claude Code: `/telegram:access pair <code>`
+3. Lock it: `/telegram:access policy allowlist`
+
+After step 3, only allowlisted sender IDs can reach the session. All others are silently dropped.
+
+### Research preview caveats
+
+- The `--channels` flag syntax may change
+- `--channels` only accepts plugins from Anthropic's maintained allowlist (or your org's allowlist)
+- Not production-stable — treat it as beta infrastructure
+- The channel only receives messages while the Claude Code session is open (hence the need to run it as a daemon)
+
+### Unattended use (daemon mode)
+
+The official docs explicitly address this:
+> *"For unattended use, `--dangerously-skip-permissions` bypasses prompts entirely, but only use it in environments you trust."*
+
+This confirms the approach: run Claude Code as a persistent background process with `--dangerously-skip-permissions`, and use `CLAUDE.md` to handle application-level approval logic instead.
+
+### How channels compare to alternatives
+
+| Approach | How it works | Good for |
+|---|---|---|
+| **Channels (this project)** | Pushes events into your running local session | Chat bridge, real files, real environment |
+| RichardAtCT/claude-code-telegram | Python middleware wrapping Claude Code SDK | More features, needs API key |
+| Claude in Slack | Spawns fresh cloud sandbox per mention | Team use, async tasks |
+| Claude Code on the web | Fresh cloud sandbox cloned from GitHub | Delegated async work |
+| Remote Control | Drive local session from claude.ai/mobile | Steering in-progress session |
+
+Channels fill the gap by bridging Telegram → your actual machine with your actual files open.
+
+---
+
+## 9. Two-Bot Architecture — What Was Learned
 
 ### Why a subscription CLI can't replace an API key
 
